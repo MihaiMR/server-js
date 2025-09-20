@@ -5,7 +5,7 @@ const port = process.env.PORT || 3000;
 
 const PROXY_URL = 'https://www.roproxy.com';
 
-// Helper to fetch Roblox data with headers and retries
+// Helper to fetch data with headers, retries, and timeout
 async function fetchRobloxData(endpoint, retries = 3) {
   for (let i = 0; i < retries; i++) {
     try {
@@ -14,18 +14,18 @@ async function fetchRobloxData(endpoint, retries = 3) {
           "User-Agent": "Mozilla/5.0",
           "Accept": "application/json"
         },
-        timeout: 10000 // 10 seconds
+        timeout: 10000
       });
       return response.data;
     } catch (error) {
       console.error(`Attempt ${i + 1} failed for ${endpoint}: ${error.message}`);
       if (i === retries - 1) throw error;
-      await new Promise(r => setTimeout(r, 1000)); // wait 1 second before retry
+      await new Promise(r => setTimeout(r, 1000));
     }
   }
 }
 
-// Fetch all T-shirts (with safe error handling)
+// -------------------- T-SHIRTS --------------------
 app.get('/user-assets', async (req, res) => {
   const { username } = req.query;
   if (!username) return res.status(400).json({ error: 'Username is required' });
@@ -34,13 +34,13 @@ app.get('/user-assets', async (req, res) => {
     const endpoint = `/v1/catalog/items/details?Category=3&CreatorName=${encodeURIComponent(username)}`;
     const data = await fetchRobloxData(endpoint);
 
-    if (!data || !data.data) {
-      console.warn(`No T-shirt data returned for username: ${username}`);
-      return res.json([]); // return empty array instead of crashing
+    if (!data || typeof data !== 'object' || !Array.isArray(data.data)) {
+      console.warn(`Invalid T-shirt data for ${username}:`, data);
+      return res.json([]);
     }
 
     const tshirts = data.data.map(item => ({
-      id: item.id,
+      id: item.id || 0,
       name: item.name || "Unknown",
       price: item.price || 0,
       creator: item.creator?.name || "Unknown"
@@ -49,12 +49,12 @@ app.get('/user-assets', async (req, res) => {
     console.log(`Fetched ${tshirts.length} T-shirts for ${username}`);
     res.json(tshirts);
   } catch (error) {
-    console.error("Failed to fetch T-shirts:", error.message);
+    console.error("Failed to fetch T-shirts:", error.message, error.response?.data);
     res.status(500).json({ error: 'Failed to fetch T-shirts' });
   }
 });
 
-// Fetch all gamepasses across all games (with safe error handling)
+// -------------------- GAMEPASSES --------------------
 app.get('/user-gamepasses', async (req, res) => {
   const { userId } = req.query;
   if (!userId) return res.status(400).json({ error: 'User ID is required' });
@@ -63,26 +63,28 @@ app.get('/user-gamepasses', async (req, res) => {
     let allGames = [];
     let cursor = "";
 
-    // Step 1: fetch all games (paginated)
+    // Fetch all games (paginated)
     do {
       const url = `/v2/users/${userId}/games?accessFilter=Public&limit=50&cursor=${cursor}`;
       const gameData = await fetchRobloxData(url);
-      if (!gameData || !gameData.data) break; // safe check
+      if (!gameData || !Array.isArray(gameData.data)) break;
+
       allGames.push(...gameData.data);
       cursor = gameData.nextPageCursor || "";
     } while (cursor);
 
     const gamepasses = [];
 
-    // Step 2: fetch all gamepasses per universe (paginated)
+    // Fetch all gamepasses per universe (paginated)
     for (const game of allGames) {
-      if (!game.universeId) continue; // safe check
+      if (!game.universeId) continue;
 
       let gpCursor = "";
       do {
         const gpUrl = `/v1/games/${game.universeId}/game-passes?limit=100&cursor=${gpCursor}`;
         const gpData = await fetchRobloxData(gpUrl);
-        if (gpData?.data?.gamePasses) {
+
+        if (gpData?.data?.gamePasses && Array.isArray(gpData.data.gamePasses)) {
           gamepasses.push(...gpData.data.gamePasses.map(gp => ({
             id: gp.id,
             name: gp.name || "Unknown",
@@ -90,6 +92,7 @@ app.get('/user-gamepasses', async (req, res) => {
             gameName: game.name || "Unknown"
           })));
         }
+
         gpCursor = gpData?.nextPageCursor || "";
       } while (gpCursor);
     }
@@ -97,7 +100,7 @@ app.get('/user-gamepasses', async (req, res) => {
     console.log(`Fetched ${gamepasses.length} gamepasses for user ${userId}`);
     res.json(gamepasses);
   } catch (error) {
-    console.error("Failed to fetch gamepasses:", error.message);
+    console.error("Failed to fetch gamepasses:", error.message, error.response?.data);
     res.status(500).json({ error: 'Failed to fetch gamepasses' });
   }
 });
